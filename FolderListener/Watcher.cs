@@ -182,6 +182,7 @@ namespace FolderListener
             {
                 using (SqlConnection myConnection = new SqlConnection(connectionString))
                 {
+                    // build the sql query
                     string oString = "Select * from [vwClientAccounts] where ClientNo=@clientNo";
                     SqlCommand oCmd = new SqlCommand(oString, myConnection);
                     oCmd.Parameters.AddWithValue("@clientNo", clientId);
