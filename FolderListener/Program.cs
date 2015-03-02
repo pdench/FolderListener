@@ -20,6 +20,7 @@ namespace FolderListener
                 return;
             }
 
+            
             Watcher w = new Watcher();
             w.Run(args);
         }

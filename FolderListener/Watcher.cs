@@ -11,11 +11,17 @@ namespace FolderListener
 {
     public class Watcher
     {
-        static string pdfType = "";
         static string debugFlag = ConfigurationManager.AppSettings["Debug"].ToString();
+        static string errorFolder = ConfigurationManager.AppSettings["ErrorFolder"].ToString();
 
         public void Run(string[] args)
         {
+
+            // make sure that the error folder ends with "\"; will throw an error if not
+            if (errorFolder.EndsWith("\\"))
+            {
+                errorFolder += "\\";
+            }
 
             // Create a new FileSystemWatcher and set its properties.
             FileSystemWatcher watcher = new FileSystemWatcher();
@@ -46,7 +52,15 @@ namespace FolderListener
             // Specify what is done when a file is changed, created, or deleted.
             Console.WriteLine("File: " + e.FullPath + " " + e.ChangeType);
             Console.WriteLine("Create XML File for OCR for file name " + e.Name);
-            CreateXMLMapDoc(e.Name, e.FullPath);
+            try
+            {
+                CreateXMLMapDoc(e.Name, e.FullPath);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                System.IO.File.Move(e.FullPath, errorFolder + e.Name);
+            }
         }
 
         private static void OnRenamed(object source, RenamedEventArgs e)
@@ -67,78 +81,156 @@ namespace FolderListener
             //      "I" - Individual - 1040
             //      "C" - Corporate - 1120
             //      "S" - Corporate - 1120S
-            //      "P" - Partnership - ????
             // the next 6-9 characters are the client ID
             //      --> these 6-9 characters will be followed by "ACCT", "GOVT" or "CLNT"
             //      --> the value that we must look for in the file name is a parameter
             //      --> passed in and placed into the pdfType variable.
-            //      the "_V1" at the end will be ignored. AWD has indicated that this value is ALWAYS V1
+            //      the "_V1" at the end will be ignored. AWD has indicated that this value is a version number that is not needed in m-files
+            //      any data that appears after the version number and before the ".pdf" in the file name will be added to the document name.
+            //      this data is likely the shareholder name for a Schedule K1.
 
+            string pdfType = "";
             string clientId = "";
             string year = "";
             string returnType = "";
             string documentName = "Form ";
             string outputFileName = PathNameNoFileName(pathName, fileName) + FileNameNoExt(fileName) + ".xml";
             string pdfTypeForDocName = "";
+            int clientIdLength = 0;
+            bool isExtension = false;
+
+            fileName = fileName.ToUpper();
+            // looking for data between the version number
+            int pdfLocation = fileName.IndexOf(".PDF");
+            int versionLocation = fileName.IndexOf("_V") + 3;       // add 3 to move beyond the version number in the string
+            string shareholderName = fileName.Substring(versionLocation, pdfLocation - versionLocation);       // the "+4" adds the ".pdf" back to get the right position
 
             if (fileName.IndexOf("ACCT") > -1) { pdfType = "ACCT"; }
             if (fileName.IndexOf("GOVT") > -1) { pdfType = "GOVT"; }
             if (fileName.IndexOf("CLNT") > -1) { pdfType = "CLNT"; }
+            if (fileName.IndexOf("K1") > -1) { pdfType = "K1"; }
 
-            switch (pdfType)
+            if (debugFlag == "1")
             {
-                case "ACCT":
-                    pdfTypeForDocName = "Accounting Copy";
-                    break;
-                case "GOVT":
-                    pdfTypeForDocName = "Government Copy";
-                    break;
-                case "CLNT":
-                    pdfTypeForDocName = "Client Copy";
-                    break;
-                default:
-                    pdfTypeForDocName = "Other Copy";
-                    break;
+                Console.WriteLine("PDF Type: " + pdfType);
             }
 
+            if (debugFlag == "1")
+            {
+                Console.WriteLine("Version Pos: " + fileName.IndexOf("_V").ToString());
+            }
 
+            if (pdfType == "")        // these are the extensions
+            {
+                clientIdLength = fileName.IndexOf("_V");
+                isExtension = true;
+                if (fileName.Substring(2, 1) == "I")
+                {
+                    returnType = "4868";
+                }
+                else
+                {
+                    returnType = "7004";
+                }
+            }
+            else
+            {
+                clientIdLength = fileName.IndexOf(pdfType);
+            }
 
             year = "20" + fileName.Substring(0, 2);
-            
-            int clientIdLength = fileName.IndexOf(pdfType);
 
             clientId = fileName.Substring(4, clientIdLength - 4);
             if (clientId.IndexOf(".") == -1)
             {
                 clientId = clientId + ".0";
             }
-            switch (fileName.Substring(2, 1))
+
+            if (!isExtension)           // if this is an extension, we have already set the return type
             {
-                case "I":
-                    returnType = "1040";
+                switch (fileName.Substring(2, 1))
+                {
+                    case "I":
+                        returnType = "1040";
+                        break;
+                    case "C":
+                        returnType = "1120";
+                        break;
+                    case "S":
+                        returnType = "1120S";
+                        break;
+                    case "P":
+                        returnType = "1065";
+                        break;
+                    case "X":
+                        returnType = "990";
+                        break;
+                    case "F":
+                        returnType = "1041";
+                        break;
+                    case "K":
+                        returnType = "5500";
+                        break;
+                    case "Y":
+                        returnType = "709";
+                        break;
+                    default:
+                        returnType = "1040";
+                        break;
+                }
+            }
+
+            switch (pdfType)
+            {
+                case "ACCT":
+                    pdfTypeForDocName = " - Office";
                     break;
-                case "C":
-                    returnType = "1120";
-                   break;
-                case "S":
-                    returnType = "1102S";
+                case "GOVT":
+                    pdfTypeForDocName = " - Filing";
                     break;
-                case "P":
-                    returnType = "1120S";
+                case "CLNT":
+                    pdfTypeForDocName = " - Client";
+                    break;
+                case "K1":
+                    pdfTypeForDocName = "";
+                    returnType = "K1";
                    break;
                 default:
-                    returnType = "1040";
+                    pdfTypeForDocName = " - Extension";
                     break;
             }
 
-            documentName += returnType + " - " + pdfTypeForDocName;
-            string clientName = ClientName(clientId);
+            Client cl = new Client();
+            cl = ClientName(clientId);
+
+            documentName = year + " - Form " + returnType;
+            if (cl.FYE != "12")
+            {
+                int fyeYear = Convert.ToInt16(year) + 1;
+                documentName += " (FYE " + cl.FYE + "/" + fyeYear.ToString() + ")";
+            }
+            if (isExtension)
+            {
+                documentName += " Extension";
+            }
+
+            documentName += " - " + cl.ClientName;
+
+            if (pdfTypeForDocName != "")
+            {
+                documentName += pdfTypeForDocName + " Copy";
+            }
+
+            if (shareholderName != "") 
+            {
+                documentName += " - " + shareholderName.Trim();
+            }
 
             StringBuilder sb = new StringBuilder();
             sb.Append(@"<?xml version=""1.0"" encoding=""ISO-8859-1""?>");
             sb.Append(@"<document>");
             sb.Append(@"<client><![CDATA[");
-            sb.Append(clientName);
+            sb.Append(cl.ClientName);
             sb.Append(@"]]></client>");
             sb.Append(@"<year>");
             sb.Append(year);
@@ -146,9 +238,9 @@ namespace FolderListener
             sb.Append(@"<returntype>");
             sb.Append(returnType);
             sb.Append(@"</returntype>");
-            sb.Append(@"<name>");
+            sb.Append(@"<name><![CDATA[");
             sb.Append(documentName);
-            sb.Append(@"</name>");
+            sb.Append(@"]]></name>");
             sb.Append(@"</document>");
 
             if (debugFlag == "1")
@@ -161,6 +253,12 @@ namespace FolderListener
 
         private static string PathNameNoFileName(string pathName, string fileName)
         {
+            if (debugFlag == "1")
+            {
+                Console.WriteLine(pathName);
+                Console.WriteLine(fileName);
+                Console.WriteLine(pathName.IndexOf(fileName).ToString());
+            }
             int fileNamePos = pathName.IndexOf(fileName);
             return pathName.Substring(0, fileNamePos);
         }
@@ -168,14 +266,19 @@ namespace FolderListener
         private static string FileNameNoExt(string fileName)
         {
 
+            Console.WriteLine(fileName);
+            Console.WriteLine(fileName.LastIndexOf(".").ToString());
             int dotPos = fileName.LastIndexOf(".");
             return fileName.Substring(0, dotPos);
 
         }
 
-        private static string ClientName(string clientId)
+        private static Client ClientName(string clientId)
         {
-            string retValue = " No Selection - 0.0";        // set the original value, which will be used if the client ID is not found in the database
+            Client thisClient = new Client();
+
+            string clientName = " No Selection - 0.0";        // set the original value, which will be used if the client ID is not found in the database
+            string fye = "";
 
             var connectionString = ConfigurationManager.ConnectionStrings["AWD"].ConnectionString;
             try
@@ -200,7 +303,8 @@ namespace FolderListener
                         }
                         while (oReader.Read())
                         {
-                            retValue = oReader["ClientName"].ToString();
+                            clientName = oReader["ClientName"].ToString();
+                            fye = oReader["fye"].ToString();
                         }
 
                         myConnection.Close();
@@ -211,7 +315,9 @@ namespace FolderListener
             {
                 Console.WriteLine("Error: " + ex.Message);
             }
-            return retValue;
+            thisClient.ClientName = clientName;
+            thisClient.FYE = fye;
+            return thisClient;
 
         }
     }
